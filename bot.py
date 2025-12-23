@@ -39,11 +39,11 @@ async def process_album(group_id, chat_id, context, header):
         return
 
     # send album to user anonymously
-    await context.bot.send_media_group(chat_id, media_items)
+    await context.bot.send_media_group(chat_id=chat_id, media=media_items)
 
     # send album to audit channel
     await context.bot.send_message(chat_id=AUDIT_CHANNEL_ID, text=header + "📦 Media Album")
-    await context.bot.send_media_group(chat_id=AUDIT_CHANNEL_ID, media_items)
+    await context.bot.send_media_group(chat_id=AUDIT_CHANNEL_ID, media=media_items)
 
     album_tasks.pop(group_id, None)
 
