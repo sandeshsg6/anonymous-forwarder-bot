@@ -9,15 +9,16 @@ from telegram.ext import (
     filters
 )
 
-# ===== ENV VARIABLES =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 AUDIT_CHANNEL_ID = os.getenv("AUDIT_CHANNEL_ID")
 
-# ===== GLOBALS =====
-albums = {}       # stores media grouped by media_group_id
-album_tasks = {}  # tracks async tasks for sending albums
+# Store media messages by media_group_id
+album_buffer = {}
+album_tasks = {}
 
-# ===== START COMMAND =====
+# Delay in seconds to wait for all album items
+ALBUM_DELAY = 1.5
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📩 Welcome to the Anonymous Forwarder Bot! 🔒\n\n"
@@ -25,7 +26,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✨ Works for text, photos, videos, documents, and albums!"
     )
 
-# ===== HELPER: AUDIT HEADER =====
 def audit_header(update: Update):
     user = update.effective_user
     return (
@@ -35,33 +35,24 @@ def audit_header(update: Update):
         f"🆔 User ID: {user.id}\n\n"
     )
 
-# ===== ASYNC FUNCTION TO SEND ALBUMS =====
-async def process_album(group_id, chat_id, context, header):
-    # wait for all media in the album
-    await asyncio.sleep(1)  # Telegram may send media messages slightly delayed
+async def process_album(media_group_id, chat_id, context, header):
+    await asyncio.sleep(ALBUM_DELAY)  # wait for all items
 
-    media = albums.get(group_id)
-    if not media:
+    media_items = album_buffer.get(media_group_id)
+    if not media_items:
         return
 
-    # send anonymous album
-    await context.bot.send_media_group(chat_id, media)
+    # Send album to user
+    await context.bot.send_media_group(chat_id, media_items)
 
-    # send audit album with header
-    await context.bot.send_message(
-        chat_id=AUDIT_CHANNEL_ID,
-        text=header + "📦 Media Album"
-    )
-    await context.bot.send_media_group(
-        chat_id=AUDIT_CHANNEL_ID,
-        media=media
-    )
+    # Send album to audit channel with header
+    await context.bot.send_message(chat_id=AUDIT_CHANNEL_ID, text=header + "📦 Media Album")
+    await context.bot.send_media_group(chat_id=AUDIT_CHANNEL_ID, media=media_items)
 
-    # cleanup
-    albums.pop(group_id, None)
-    album_tasks.pop(group_id, None)
+    # Cleanup
+    album_buffer.pop(media_group_id, None)
+    album_tasks.pop(media_group_id, None)
 
-# ===== HANDLE ALL MESSAGES =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     chat_id = update.effective_chat.id
@@ -70,44 +61,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===== ALBUM HANDLING =====
     if msg.media_group_id:
         gid = msg.media_group_id
+        if gid not in album_buffer:
+            album_buffer[gid] = []
 
-        if gid not in albums:
-            albums[gid] = []
-
+        # Handle photos and videos
         if msg.photo:
-            albums[gid].append(
-                InputMediaPhoto(msg.photo[-1].file_id, caption=msg.caption)
-            )
+            album_buffer[gid].append(InputMediaPhoto(msg.photo[-1].file_id, caption=msg.caption))
         elif msg.video:
-            albums[gid].append(
-                InputMediaVideo(msg.video.file_id, caption=msg.caption)
-            )
+            album_buffer[gid].append(InputMediaVideo(msg.video.file_id, caption=msg.caption))
 
-        # only start the task once per media_group_id
+        # Only start the task once per media_group_id
         if gid not in album_tasks:
             album_tasks[gid] = context.application.create_task(
                 process_album(gid, chat_id, context, header)
             )
-        return
+        return  # do not process this message further
 
     # ===== NON-ALBUM MESSAGES =====
-    await msg.copy(chat_id=chat_id)  # send anonymously
+    await msg.copy(chat_id=chat_id)  # anonymous forward
 
-    # audit message
+    # Audit
     await context.bot.send_message(chat_id=AUDIT_CHANNEL_ID, text=header)
     await msg.copy(chat_id=AUDIT_CHANNEL_ID)
 
-# ===== MAIN FUNCTION =====
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # handlers
+    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.ALL, handle_message))
 
-    # start polling
     app.run_polling()
 
-# ===== RUN BOT =====
 if __name__ == "__main__":
     main()
